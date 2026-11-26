@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Data files (Prevents accidental leaks of company/customer records)
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+*.parquet
+*.sqlite3
+*.db
+/DUMP/
+
+# Streamlit secrets and local configs
+.streamlit/secrets.toml
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
+.env
+.env.*
+*.pem
+*.key
+*.token
+*.pfx
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
