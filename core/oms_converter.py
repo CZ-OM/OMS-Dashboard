@@ -41,6 +41,113 @@ OMS_DATETIME_COLUMNS: tuple[str, ...] = (
 RESOLVED_TIME_RAW_COL: str = "Resolved  total time(Days:Hours)"
 RESOLVED_TIME_DATE_ONLY_COL: str = "Resolved  total time(Days)"
 
+TARGET_OMS_COLUMNS: tuple[str, ...] = (
+    "Ticket ID",
+    "Ticket Source",
+    "Creator's Department",
+    "Status",
+    "Issue Category",
+    "Issue Subcategory",
+    "Department",
+    "Asset",
+    "Station",
+    "Assigned To",
+    "Created By",
+    "Location",
+    "Priority",
+    "Ticket Type",
+    "Asset ID",
+    "Charger",
+    "Updated At",
+    "Created At",
+    "Assigned At",
+    "Acknowledgement SLA Deadline",
+    "Acknowledged On",
+    "Acknowledgement time taken(Days)",
+    "Acknowledgement SLA Status",
+    "In Progress Status Time",
+    "Hold Status Time",
+    "Hold total time(Days)",
+    "Resolved At Time",
+    "Resolved  total time(Days)",
+    "Restored At Time",
+    "Restore total time(Days)",
+    "Closed At",
+    "Total time taken (Days)",
+    "Resolution SLA Deadline",
+    "SLA Breached As per Actual (Days)",
+    "SLA Breached As per OMS",
+    "Approval Requested At Time",
+    "Approval Accepted At Time",
+    "Approval Time taken (Days)",
+    "CET Approval Requested At Time",
+    "CET Approval Accepted At Time",
+    "CET Approval Time taken (Days)",
+    "Resolution Note",
+)
+
+EXCLUDED_OMS_RAW_COLUMNS: tuple[str, ...] = (
+    "Call Type",
+    "Customer Phone",
+    "Call SID",
+    "Is Reverted",
+    "Reverted At",
+    "Issue Title",
+)
+
+def standardize_to_target_42(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    col_map: dict[str, str] = {}
+    for c in out.columns:
+        c_str = str(c).strip()
+        c_clean = c_str.replace("’", "'").replace("  ", " ").lower()
+        if c_clean in ("creator's department", "creator department", "creators department", "creator dept", "creator's dept"):
+            col_map[c] = "Creator's Department"
+        elif c_clean in ("resolution note", "remarks", "resolution remarks", "closing remarks", "closure remarks"):
+            col_map[c] = "Resolution Note"
+        elif c_clean in ("sla breached as per oms", "sla breached", "sla breach as per oms"):
+            if "SLA Breached As per OMS" not in out.columns or c == "SLA Breached As per OMS":
+                col_map[c] = "SLA Breached As per OMS"
+
+    if col_map:
+        out = out.rename(columns=col_map)
+
+    if "SLA Breached" in out.columns:
+        if "SLA Breached As per OMS" in out.columns:
+            out["SLA Breached As per OMS"] = out["SLA Breached As per OMS"].fillna(out["SLA Breached"])
+            out = out.drop(columns=["SLA Breached"])
+        else:
+            out = out.rename(columns={"SLA Breached": "SLA Breached As per OMS"})
+
+    to_drop = [c for c in EXCLUDED_OMS_RAW_COLUMNS if c in out.columns]
+    if to_drop:
+        out = out.drop(columns=to_drop)
+
+    for c in TARGET_OMS_COLUMNS:
+        if c not in out.columns:
+            out[c] = pd.NA
+
+    res = out[list(TARGET_OMS_COLUMNS)].copy()
+    if "today_date" in df.attrs:
+        res.attrs["today_date"] = df.attrs["today_date"]
+    return res
+
+
+def is_full_raw_oms_dump(df_or_cols: Union[pd.DataFrame, list[str], set[str], tuple[str, ...]]) -> bool:
+    if hasattr(df_or_cols, "columns"):
+        cols = set(df_or_cols.columns)
+    else:
+        cols = set(df_or_cols)
+    col_str_lower = {str(c).replace("’", "'").strip().lower() for c in cols}
+    has_call_tracking = bool(col_str_lower.intersection({
+        "call sid", "call type", "customer phone", "is reverted", "reverted at", "issue title"
+    }))
+    has_creators_dept = bool(col_str_lower.intersection({
+        "creator's department", "creator department", "creators department", "creator dept", "creator's dept"
+    }))
+    return (has_call_tracking and has_creators_dept) or (len(cols) >= 35 and has_creators_dept) or ("call sid" in col_str_lower and "ticket id" in col_str_lower)
+
 OMS_DELTA_SPECS: tuple[tuple[str, str, Optional[str]], ...] = (
     ("Acknowledgement time taken(Days)", "Assigned At", "Acknowledged On"),
     ("Hold total time(Days)", "Hold Status Time", None),
@@ -350,13 +457,31 @@ def _normalize_today_date(today_date: Optional[date]) -> date:
 def convert_oms_to_date_only(
     df: pd.DataFrame,
     today_date: Optional[date] = None,
+    standardize_schema: Optional[bool] = None,
 ) -> pd.DataFrame:
     ref_today = _normalize_today_date(today_date)
     out = df.copy()
 
+    should_standardize = (
+        standardize_schema
+        if standardize_schema is not None
+        else is_full_raw_oms_dump(out)
+    )
+
     if RESOLVED_TIME_RAW_COL in out.columns:
         if RESOLVED_TIME_DATE_ONLY_COL not in out.columns:
             out = out.rename(columns={RESOLVED_TIME_RAW_COL: RESOLVED_TIME_DATE_ONLY_COL})
+
+    if should_standardize:
+        if "SLA Breached" in out.columns:
+            if "SLA Breached As per OMS" not in out.columns:
+                out = out.rename(columns={"SLA Breached": "SLA Breached As per OMS"})
+            else:
+                out["SLA Breached As per OMS"] = out["SLA Breached As per OMS"].fillna(out["SLA Breached"])
+                out = out.drop(columns=["SLA Breached"])
+
+        if "Remarks" in out.columns and "Resolution Note" not in out.columns:
+            out = out.rename(columns={"Remarks": "Resolution Note"})
 
     parsed_dates: dict[str, list[Optional[date]]] = {}
     for col in OMS_DATETIME_COLUMNS:
@@ -376,6 +501,8 @@ def convert_oms_to_date_only(
         has_sources = has_start and has_end
 
         if not has_sources and target_col not in out.columns:
+            if should_standardize and target_col in TARGET_OMS_COLUMNS:
+                out[target_col] = pd.Series([pd.NA] * n_rows, index=out.index, dtype="Int64")
             continue
 
         if not has_sources:
@@ -401,6 +528,9 @@ def convert_oms_to_date_only(
             for s_d, e_d in zip(start_list, end_list)
         ]
         out[target_col] = pd.Series(delta_vals, index=out.index, dtype="Int64")
+
+    if should_standardize:
+        out = standardize_to_target_42(out)
 
     out.attrs["today_date"] = ref_today.strftime("%Y-%m-%d")
     return out

@@ -537,8 +537,15 @@ class TestOmsDashboardUI(unittest.TestCase):
         self.assertIsNone(at.session_state["oms_df"])
         self.assertIsNone(at.session_state["reconciliation_result"])
 
-        sample_btn = next(b for b in at.sidebar.button if b.label == "Sample Files")
-        sample_btn.click().run()
+        if SAMPLE_FIR_PATH.exists() and SAMPLE_OMS_PATH.exists():
+            at.sidebar.file_uploader(key="fir_uploader").upload(
+                "fir.xlsx", SAMPLE_FIR_PATH.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ).run()
+            at.sidebar.file_uploader(key="oms_uploader").upload(
+                "oms.xlsx", SAMPLE_OMS_PATH.read_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ).run()
+        else:
+            self.skipTest("Sample files missing")
         self.assertEqual(len(at.exception), 0)
         self.assertIsNotNone(at.session_state["fir_df"])
         self.assertIsNotNone(at.session_state["oms_df"])
@@ -605,9 +612,9 @@ class TestOmsDashboardUI(unittest.TestCase):
         self.assertEqual(len(at.session_state["oms_dash_df"]), 0)
 
     def test_compare_sample_after_upload_not_overwritten(self):
-        if not (SAMPLE_FIR_PATH.exists() and SAMPLE_OMS_PATH.exists()):
-            self.skipTest("Sample DUMP files missing")
+        self.skipTest("Sample Files button removed per user request")
 
+    def test_compare_search_regex_metacharacters_and_html_escaping(self):
         at = self._new_app()
         at.sidebar.radio(key="nav_view").set_value("OMS-FIR Compare").run()
         self.assertEqual(len(at.exception), 0)
@@ -615,28 +622,15 @@ class TestOmsDashboardUI(unittest.TestCase):
         mini_fir = pd.DataFrame(
             [{"Station Name": "S1", "OCPP ID": "CHG-1", "Status": "Faulted", "Issue_Age": "1 day"}]
         )
+        mini_oms = pd.DataFrame(
+            [{"Ticket ID": "T1", "Charger": "CHG-1", "Station": "S1", "Status": "Assigned", "Created At": "2026-11-20"}]
+        )
         at.sidebar.file_uploader(key="fir_uploader").upload(
             "mini_fir.csv", _df_to_csv_bytes(mini_fir), "text/csv"
         ).run()
-        self.assertEqual(len(at.exception), 0)
-        self.assertEqual(len(at.session_state["fir_df"]), 1)
-
-        sample_btn = next(b for b in at.sidebar.button if b.label == "Sample Files")
-        sample_btn.click().run()
-        self.assertEqual(len(at.exception), 0)
-        self.assertEqual(at.session_state["dataset_source"], "Sample Demo Files")
-        self.assertEqual(len(at.session_state["fir_df"]), 54)
-        self.assertEqual(len(at.session_state["oms_df"]), 2605)
-
-    def test_compare_search_regex_metacharacters_and_html_escaping(self):
-        if not (SAMPLE_FIR_PATH.exists() and SAMPLE_OMS_PATH.exists()):
-            self.skipTest("Sample DUMP files missing")
-
-        at = self._new_app()
-        at.sidebar.radio(key="nav_view").set_value("OMS-FIR Compare").run()
-        self.assertEqual(len(at.exception), 0)
-
-        next(b for b in at.sidebar.button if b.label == "Sample Files").click().run()
+        at.sidebar.file_uploader(key="oms_uploader").upload(
+            "mini_oms.csv", _df_to_csv_bytes(mini_oms), "text/csv"
+        ).run()
         self.assertEqual(len(at.exception), 0)
         next(b for b in at.sidebar.button if b.label == "Compare Both Files").click().run()
         self.assertEqual(len(at.exception), 0)

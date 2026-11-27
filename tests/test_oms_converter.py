@@ -1337,6 +1337,83 @@ class TestOMSConverter(unittest.TestCase):
         self.assertEqual(str(converted[RESOLVED_TIME_DATE_ONLY_COL].dtype), "Int64")
         self.assertEqual(int(converted.loc[0, RESOLVED_TIME_DATE_ONLY_COL]), 2)
 
+    def test_raw_dump_standardization_to_42_columns(self):
+        from core import TARGET_OMS_COLUMNS, EXCLUDED_OMS_RAW_COLUMNS, is_full_raw_oms_dump
+        raw_row = {
+            "Ticket ID": "EX-2026-99999",
+            "Ticket Source": "Exotel",
+            "Status": "Assigned",
+            "Call Type": "Inbound",
+            "Customer Phone": "+919876543210",
+            "Call SID": "CA123456789",
+            "Issue Category": "Charger",
+            "Issue Subcategory": "Fault",
+            "Department": "O&M",
+            "Asset": "Station Alpha",
+            "Station": "Station Alpha",
+            "Assigned To": "Engineer One",
+            "Created By": "Agent One",
+            "Created At": "24 Nov 2026, 06:08:50 PM",
+            "Updated At": "25 Nov 2026, 10:13:49 AM",
+            "Location": "Mumbai",
+            "Priority": "High",
+            "Ticket Type": "EXOTEL",
+            "Asset ID": "A-101",
+            "Charger": "MH0001",
+            "Acknowledgement SLA Deadline": "25 Nov 2026, 04:37:51 PM",
+            "Resolution SLA Deadline": "26 Nov 2026, 01:59:45 AM",
+            "SLA Breached": "No",
+            "Closed At": None,
+            "Is Reverted": False,
+            "Reverted At": None,
+            "Issue Title": "Charger Outage",
+            "Creator's Department": "CET",
+            "Acknowledged On": "25 Nov 2026, 09:00:00 AM",
+            "Acknowledgement SLA Status": "Acknowledged",
+            "Resolution Note": "Fixed loose connection",
+            "Assigned At": "24 Nov 2026, 06:15:00 PM",
+            "In Progress Status Time": "25 Nov 2026, 09:30:00 AM",
+            "Hold Status Time": "25 Nov 2026, 12:00:00 PM",
+            "Resolved At Time": "26 Nov 2026, 02:00:00 PM",
+            "Restored At Time": "26 Nov 2026, 01:00:00 PM",
+            "Approval Requested At Time": "26 Nov 2026, 02:30:00 PM",
+            "Approval Accepted At Time": "26 Nov 2026, 03:00:00 PM",
+            "CET Approval Requested At Time": "26 Nov 2026, 03:15:00 PM",
+            "CET Approval Accepted At Time": "26 Nov 2026, 04:00:00 PM",
+        }
+        df_raw = pd.DataFrame([raw_row])
+        self.assertTrue(is_full_raw_oms_dump(df_raw))
+
+        converted = convert_oms_to_date_only(df_raw, today_date=date(2026, 11, 27))
+
+        self.assertEqual(len(converted.columns), 42)
+        self.assertEqual(list(converted.columns), list(TARGET_OMS_COLUMNS))
+
+        for excluded in EXCLUDED_OMS_RAW_COLUMNS:
+            self.assertNotIn(excluded, converted.columns)
+
+        self.assertEqual(converted.loc[0, "Ticket ID"], "EX-2026-99999")
+        self.assertEqual(converted.loc[0, "Creator's Department"], "CET")
+        self.assertEqual(converted.loc[0, "SLA Breached As per OMS"], "No")
+        self.assertEqual(converted.loc[0, "Created At"], "2026-11-24")
+        self.assertEqual(converted.loc[0, "Updated At"], "2026-11-25")
+        self.assertEqual(int(converted.loc[0, "Acknowledgement time taken(Days)"]), 1)
+        self.assertEqual(int(converted.loc[0, "Hold total time(Days)"]), 2)
+        self.assertEqual(int(converted.loc[0, "Resolved  total time(Days)"]), 2)
+        self.assertEqual(int(converted.loc[0, "Restore total time(Days)"]), 2)
+        self.assertEqual(int(converted.loc[0, "SLA Breached As per Actual (Days)"]), 2)
+        self.assertEqual(int(converted.loc[0, "Approval Time taken (Days)"]), 0)
+        self.assertEqual(int(converted.loc[0, "CET Approval Time taken (Days)"]), 0)
+
+        # Excel export check
+        xlsx_bytes = export_oms_date_only_excel(converted)
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+        self.assertEqual(wb.active.title, "Tickets")
+        ws = wb.active
+        exported_headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+        self.assertEqual(exported_headers, list(TARGET_OMS_COLUMNS))
+
+
 
 if __name__ == "__main__":
     unittest.main()

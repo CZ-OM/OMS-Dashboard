@@ -211,7 +211,7 @@ def export_oms_date_only_csv(df: pd.DataFrame) -> str:
     return export_df.to_csv(index=False)
 
 
-def export_oms_date_only_excel(df: pd.DataFrame) -> bytes:
+def export_oms_date_only_excel(df: pd.DataFrame, sheet_title: str = "Tickets") -> bytes:
     output = io.BytesIO()
     wb = openpyxl.Workbook()
 
@@ -225,7 +225,7 @@ def export_oms_date_only_excel(df: pd.DataFrame) -> bytes:
     )
 
     ws = wb.active
-    ws.title = "OMS Date Only"
+    ws.title = sheet_title or "Tickets"
     ws.views.sheetView[0].showGridLines = True
 
     columns = list(df.columns)

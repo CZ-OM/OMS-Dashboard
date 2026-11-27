@@ -1,5 +1,6 @@
 import streamlit as st
 
+# Backward-compatible re-exports for external modules & test runners
 from core.models import (
     CATEGORY_GAP,
     CATEGORY_PHANTOM,
@@ -28,6 +29,36 @@ from views.oms_dashboard import (
     render_oms_landing_view,
     render_oms_dashboard_main,
 )
+
+__all__ = [
+    "CATEGORY_GAP",
+    "CATEGORY_PHANTOM",
+    "CATEGORY_ACTIVE",
+    "CATEGORY_HEALTHY",
+    "ReconciliationResult",
+    "ReconciliationSummary",
+    "load_dataset",
+    "reconcile_incident_records",
+    "create_filtered_result",
+    "generate_reconciliation_excel",
+    "export_reconciliation_csv",
+    "SHARED_CSS",
+    "inject_shared_styles",
+    "calc_table_height",
+    "SAMPLE_FIR_PATH",
+    "SAMPLE_OMS_PATH",
+    "init_compare_session_state",
+    "render_compare_sidebar",
+    "render_landing_view",
+    "render_audit_view",
+    "render_compare_main",
+    "init_oms_dashboard_state",
+    "render_oms_dashboard_sidebar",
+    "render_oms_landing_view",
+    "render_oms_dashboard_main",
+    "init_session_state",
+    "main",
+]
 
 
 def init_session_state() -> None:

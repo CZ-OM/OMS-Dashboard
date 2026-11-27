@@ -13,11 +13,12 @@ from core.models import CLOSED_OMS_STATUSES, OPEN_OMS_STATUSES
 from core.oms_converter import (
     RESOLVED_TIME_DATE_ONLY_COL,
     convert_oms_to_date_only,
+    is_full_raw_oms_dump,
     load_oms_raw_file,
     recalculate_hold_days,
+    standardize_to_target_42,
 )
 from views.styles import (
-    _coerce_display_cell,
     calc_table_height,
     sanitize_for_dataframe as _sanitize_for_dataframe,
 )
@@ -57,6 +58,7 @@ _TRACKER_PRIORITY_COLUMNS: tuple[str, ...] = (
     "Issue Subcategory",
     "Assigned To",
     "SLA Breached",
+    "SLA Breached As per OMS",
     "Created At",
     "Assigned At",
     "Hold Status Time",
@@ -78,6 +80,10 @@ def init_oms_dashboard_state() -> None:
         st.session_state["oms_dash_filename"] = None
     if "oms_dash_file_sig" not in st.session_state:
         st.session_state["oms_dash_file_sig"] = None
+    if "oms_dash_raw_bytes" not in st.session_state:
+        st.session_state["oms_dash_raw_bytes"] = None
+    if "oms_dash_raw_mime" not in st.session_state:
+        st.session_state["oms_dash_raw_mime"] = None
     if "oms_dash_active_today" not in st.session_state:
         st.session_state["oms_dash_active_today"] = date.today()
 
@@ -93,6 +99,8 @@ def _clear_oms_dashboard_data() -> None:
     st.session_state["oms_dash_df"] = None
     st.session_state["oms_dash_filename"] = None
     st.session_state["oms_dash_file_sig"] = None
+    st.session_state["oms_dash_raw_bytes"] = None
+    st.session_state["oms_dash_raw_mime"] = None
     _reset_oms_dashboard_filters()
     if "oms_dash_uploader" in st.session_state:
         del st.session_state["oms_dash_uploader"]
@@ -165,6 +173,8 @@ def render_oms_dashboard_sidebar() -> None:
                 raw_bytes = uploaded.getvalue()
                 raw_df = load_oms_raw_file(io.BytesIO(raw_bytes), filename=uploaded.name)
                 conv_df = convert_oms_to_date_only(raw_df, today_date=active_today)
+                st.session_state["oms_dash_raw_bytes"] = raw_bytes
+                st.session_state["oms_dash_raw_mime"] = uploaded.type
                 st.session_state["oms_dash_raw_df"] = raw_df
                 st.session_state["oms_dash_df"] = conv_df
                 st.session_state["oms_dash_filename"] = uploaded.name
@@ -174,6 +184,9 @@ def render_oms_dashboard_sidebar() -> None:
                 st.error(f"Could not read OMS dump '{uploaded.name}': {exc}")
 
     dash_df = st.session_state["oms_dash_df"]
+    if dash_df is not None and is_full_raw_oms_dump(dash_df):
+        st.session_state["oms_dash_df"] = standardize_to_target_42(dash_df)
+        dash_df = st.session_state["oms_dash_df"]
     if dash_df is not None and dash_df.attrs.get("today_date") != active_today.strftime("%Y-%m-%d"):
         st.session_state["oms_dash_df"] = recalculate_hold_days(dash_df, today_date=active_today)
         dash_df = st.session_state["oms_dash_df"]
@@ -510,8 +523,9 @@ def compute_engineer_performance(df: pd.DataFrame) -> pd.DataFrame:
     else:
         sla_actual_breach = pd.Series(False, index=df.index)
 
-    if "SLA Breached" in df.columns:
-        sla_col_breach = df["SLA Breached"].fillna("").astype(str).str.strip().str.upper() == "YES"
+    sla_col_key = "SLA Breached" if "SLA Breached" in df.columns else ("SLA Breached As per OMS" if "SLA Breached As per OMS" in df.columns else None)
+    if sla_col_key:
+        sla_col_breach = df[sla_col_key].fillna("").astype(str).str.strip().str.upper() == "YES"
     else:
         sla_col_breach = pd.Series(False, index=df.index)
 
@@ -573,8 +587,9 @@ def render_oms_dashboard_main() -> None:
     active_today: date = st.session_state["oms_dash_active_today"]
     today_str = active_today.strftime("%Y-%m-%d")
 
-    csv_payload = export_oms_date_only_csv(base_df)
-    xlsx_payload = export_oms_date_only_excel(base_df)
+    target_base_df = standardize_to_target_42(base_df) if is_full_raw_oms_dump(base_df) else base_df
+    csv_payload = export_oms_date_only_csv(target_base_df)
+    xlsx_payload = export_oms_date_only_excel(target_base_df)
 
     col_title, col_csv, col_xlsx = st.columns([2.6, 1.2, 1.2])
     with col_title:
@@ -609,7 +624,8 @@ def render_oms_dashboard_main() -> None:
         )
 
     base_status_upper = _normalized_upper_series(base_df, "Status")
-    base_sla_upper = _normalized_upper_series(base_df, "SLA Breached")
+    sla_col_name = "SLA Breached" if "SLA Breached" in base_df.columns else ("SLA Breached As per OMS" if "SLA Breached As per OMS" in base_df.columns else "SLA Breached")
+    base_sla_upper = _normalized_upper_series(base_df, sla_col_name)
 
     total_count = len(base_df)
     open_count = int(base_status_upper.isin(OPEN_OMS_STATUSES).sum())
@@ -706,7 +722,7 @@ def render_oms_dashboard_main() -> None:
         )
 
     with col_f5:
-        sla_opts = _clean_options("SLA Breached")
+        sla_opts = _clean_options(sla_col_name)
         selected_sla = st.multiselect(
             "SLA Breached",
             sla_opts,
@@ -727,7 +743,7 @@ def render_oms_dashboard_main() -> None:
         f_status = _normalized_upper_series(filtered_df, "Status")
         filtered_df = filtered_df[f_status == "ON HOLD"]
     elif selected_pill and selected_pill.startswith("SLA Breached"):
-        f_sla = _normalized_upper_series(filtered_df, "SLA Breached")
+        f_sla = _normalized_upper_series(filtered_df, sla_col_name)
         filtered_df = filtered_df[f_sla == "YES"]
 
     for col_name, selected_vals in (
@@ -735,7 +751,7 @@ def render_oms_dashboard_main() -> None:
         ("Status", selected_statuses),
         ("Priority", selected_priorities),
         ("Issue Category", selected_categories),
-        ("SLA Breached", selected_sla),
+        (sla_col_name, selected_sla),
     ):
         if selected_vals and col_name in filtered_df.columns:
             col_clean = filtered_df[col_name].fillna("").astype(str).str.strip()
@@ -793,7 +809,7 @@ def render_oms_dashboard_main() -> None:
         )
 
     cur_status = _normalized_upper_series(filtered_df, "Status")
-    cur_sla = _normalized_upper_series(filtered_df, "SLA Breached")
+    cur_sla = _normalized_upper_series(filtered_df, sla_col_name)
 
     cur_total = len(filtered_df)
     cur_open = int(cur_status.isin(OPEN_OMS_STATUSES).sum())
@@ -896,7 +912,7 @@ def render_oms_dashboard_main() -> None:
         )
 
     with k4:
-        sla_sub = f"Breach rate: {sla_pct}%" if "SLA Breached" in filtered_df.columns else "No SLA Breached column"
+        sla_sub = f"Breach rate: {sla_pct}%" if sla_col_name in filtered_df.columns else "No SLA Breached column"
         st.markdown(
             f"""
             <div class="kpi-card card-danger">
@@ -1013,8 +1029,8 @@ def render_oms_dashboard_main() -> None:
             if "Priority" in filtered_df.columns and len(filtered_df) > 0:
                 prio_df = filtered_df.copy()
                 prio_df["Priority_Clean"] = prio_df["Priority"].fillna("Unspecified").astype(str).str.strip().replace("", "Unspecified")
-                if "SLA Breached" in prio_df.columns:
-                    prio_df["SLA_Clean"] = prio_df["SLA Breached"].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+                if sla_col_name in prio_df.columns:
+                    prio_df["SLA_Clean"] = prio_df[sla_col_name].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
                     chart_prio_df = prio_df.groupby(["Priority_Clean", "SLA_Clean"]).size().reset_index(name="Tickets")
                     chart_prio = (
                         alt.Chart(chart_prio_df)
@@ -1626,34 +1642,78 @@ def render_oms_dashboard_main() -> None:
 
     with tab5:
         st.subheader("Converted date_only Schema")
-        col_p1, col_p2, col_p3 = st.columns([2.6, 1.2, 1.2])
-        with col_p1:
-            st.caption(
-                f"Full {len(filtered_df.columns)}-column converted date_only sheet "
-                f"(showing {len(filtered_df):,} of {len(base_df):,} rows; 'today' = {today_str})."
-            )
-        tab5_csv_payload = export_oms_date_only_csv(filtered_df) if is_filtered else csv_payload
-        tab5_xlsx_payload = export_oms_date_only_excel(filtered_df) if is_filtered else xlsx_payload
-        with col_p2:
-            st.download_button(
-                label="Download Filtered CSV" if is_filtered else "Download CSV",
-                data=tab5_csv_payload,
-                file_name=f"{file_stem}_date_only{'_filtered' if is_filtered else ''}.csv",
-                mime="text/csv",
-                key="oms_dash_dl_csv_preview",
-                width="stretch",
-            )
-        with col_p3:
-            st.download_button(
-                label="Download Filtered Excel" if is_filtered else "Download Excel",
-                data=tab5_xlsx_payload,
-                file_name=f"{file_stem}_date_only{'_filtered' if is_filtered else ''}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="oms_dash_dl_xlsx_preview",
-                width="stretch",
-            )
+        tab5_base = standardize_to_target_42(base_df) if is_full_raw_oms_dump(base_df) else base_df
+        tab5_filtered = standardize_to_target_42(filtered_df) if is_full_raw_oms_dump(filtered_df) else filtered_df
 
-        schema_df = _insert_row_number_column(_sanitize_for_dataframe(filtered_df))
+        if is_filtered:
+            st.caption(
+                f"Full {len(tab5_base.columns)}-column converted date_only sheet. "
+                f"Filters are active: showing {len(tab5_filtered):,} of {len(tab5_base):,} rows ('today' = {today_str})."
+            )
+            col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+            with col_b1:
+                st.download_button(
+                    label="Download Whole Excel (All Rows)",
+                    data=xlsx_payload,
+                    file_name=f"{file_stem}_date_only.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="oms_dash_dl_xlsx_whole",
+                    width="stretch",
+                )
+            with col_b2:
+                st.download_button(
+                    label="Download Whole CSV (All Rows)",
+                    data=csv_payload,
+                    file_name=f"{file_stem}_date_only.csv",
+                    mime="text/csv",
+                    key="oms_dash_dl_csv_whole",
+                    width="stretch",
+                )
+            with col_b3:
+                st.download_button(
+                    label=f"Download Filtered Excel ({len(tab5_filtered):,})",
+                    data=export_oms_date_only_excel(tab5_filtered),
+                    file_name=f"{file_stem}_date_only_filtered.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="oms_dash_dl_xlsx_preview",
+                    width="stretch",
+                )
+            with col_b4:
+                st.download_button(
+                    label=f"Download Filtered CSV ({len(tab5_filtered):,})",
+                    data=export_oms_date_only_csv(tab5_filtered),
+                    file_name=f"{file_stem}_date_only_filtered.csv",
+                    mime="text/csv",
+                    key="oms_dash_dl_csv_preview",
+                    width="stretch",
+                )
+        else:
+            col_p1, col_p2, col_p3 = st.columns([2.0, 1.5, 1.5])
+            with col_p1:
+                st.caption(
+                    f"Full {len(tab5_base.columns)}-column converted date_only sheet "
+                    f"({len(tab5_base):,} total records; 'today' = {today_str})."
+                )
+            with col_p2:
+                st.download_button(
+                    label="Download Whole CSV (date_only)",
+                    data=csv_payload,
+                    file_name=f"{file_stem}_date_only.csv",
+                    mime="text/csv",
+                    key="oms_dash_dl_csv_whole_direct",
+                    width="stretch",
+                )
+            with col_p3:
+                st.download_button(
+                    label="Download Whole Excel (date_only)",
+                    data=xlsx_payload,
+                    file_name=f"{file_stem}_date_only.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="oms_dash_dl_xlsx_preview",
+                    width="stretch",
+                )
+
+        schema_df = _insert_row_number_column(_sanitize_for_dataframe(tab5_filtered))
         st.dataframe(
             schema_df,
             width="stretch",
