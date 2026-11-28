@@ -66,6 +66,7 @@ TARGET_OMS_COLUMNS: tuple[str, ...] = (
     "Acknowledgement time taken(Days)",
     "Acknowledgement SLA Status",
     "In Progress Status Time",
+    "In Progress total time(Days)",
     "Hold Status Time",
     "Hold total time(Days)",
     "Resolved At Time",
@@ -106,6 +107,16 @@ def standardize_to_target_42(df: pd.DataFrame) -> pd.DataFrame:
             col_map[c] = "Creator's Department"
         elif c_clean in ("resolution note", "remarks", "resolution remarks", "closing remarks", "closure remarks"):
             col_map[c] = "Resolution Note"
+        elif c_clean in (
+            "in progress total time(days)",
+            "in progress total time (days)",
+            "in progress time taken(days)",
+            "in progress time taken (days)",
+            "in progress days",
+            "in progress total time",
+            "in progress time taken",
+        ):
+            col_map[c] = "In Progress total time(Days)"
         elif c_clean in ("sla breached as per oms", "sla breached", "sla breach as per oms"):
             if "SLA Breached As per OMS" not in out.columns or c == "SLA Breached As per OMS":
                 col_map[c] = "SLA Breached As per OMS"
@@ -160,6 +171,7 @@ OMS_DELTA_SPECS: tuple[tuple[str, str, Optional[str]], ...] = (
 )
 
 OMS_DELTA_COLUMNS: tuple[str, ...] = tuple(spec[0] for spec in OMS_DELTA_SPECS)
+IN_PROGRESS_TIME_COL: str = "In Progress total time(Days)"
 
 _SENTINEL_STRINGS = {"", "-", "--", "NAN", "NONE", "NAT", "NULL", "N/A", "NA"}
 
@@ -528,6 +540,26 @@ def convert_oms_to_date_only(
             for s_d, e_d in zip(start_list, end_list)
         ]
         out[target_col] = pd.Series(delta_vals, index=out.index, dtype="Int64")
+
+    if should_standardize or IN_PROGRESS_TIME_COL in out.columns:
+        has_prog = "In Progress Status Time" in out.columns
+        has_ack = "Acknowledged On" in out.columns
+        if has_prog and has_ack:
+            prog_list = parsed_dates.get("In Progress Status Time")
+            if prog_list is None:
+                prog_list = [parse_date_only(val) for val in out["In Progress Status Time"].tolist()]
+                parsed_dates["In Progress Status Time"] = prog_list
+            ack_list = parsed_dates.get("Acknowledged On")
+            if ack_list is None:
+                ack_list = [parse_date_only(val) for val in out["Acknowledged On"].tolist()]
+                parsed_dates["Acknowledged On"] = ack_list
+            prog_delta_vals = [
+                (p - a).days if (p is not None and a is not None) else pd.NA
+                for a, p in zip(ack_list, prog_list)
+            ]
+            out[IN_PROGRESS_TIME_COL] = pd.Series(prog_delta_vals, index=out.index, dtype="Int64")
+        elif should_standardize:
+            out[IN_PROGRESS_TIME_COL] = pd.Series([pd.NA] * n_rows, index=out.index, dtype="Int64")
 
     if should_standardize:
         out = standardize_to_target_42(out)

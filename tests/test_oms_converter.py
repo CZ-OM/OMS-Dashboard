@@ -1386,7 +1386,7 @@ class TestOMSConverter(unittest.TestCase):
 
         converted = convert_oms_to_date_only(df_raw, today_date=date(2026, 11, 27))
 
-        self.assertEqual(len(converted.columns), 42)
+        self.assertEqual(len(converted.columns), 43)
         self.assertEqual(list(converted.columns), list(TARGET_OMS_COLUMNS))
 
         for excluded in EXCLUDED_OMS_RAW_COLUMNS:
@@ -1398,6 +1398,7 @@ class TestOMSConverter(unittest.TestCase):
         self.assertEqual(converted.loc[0, "Created At"], "2026-11-24")
         self.assertEqual(converted.loc[0, "Updated At"], "2026-11-25")
         self.assertEqual(int(converted.loc[0, "Acknowledgement time taken(Days)"]), 1)
+        self.assertEqual(int(converted.loc[0, "In Progress total time(Days)"]), 0)
         self.assertEqual(int(converted.loc[0, "Hold total time(Days)"]), 2)
         self.assertEqual(int(converted.loc[0, "Resolved  total time(Days)"]), 2)
         self.assertEqual(int(converted.loc[0, "Restore total time(Days)"]), 2)
